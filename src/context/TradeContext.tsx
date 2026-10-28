@@ -2,11 +2,13 @@ import React, { createContext, useCallback, useContext, useMemo, useRef, useStat
 import { message } from 'antd';
 import {
   AdvanceAllocation,
+  AdvanceOrderItem,
   BonusEligibilityResult,
   BonusSlab,
   BusinessmanRecord,
   ProductItem,
   SaleOrder,
+  SaleOrderItem,
   StorageHealth,
   SupplierRecord,
   TradeStoreState,
@@ -28,6 +30,11 @@ export interface BusinessmanSpendSummary {
   lastProductName: string | null;
 }
 
+export interface OrderLineInput {
+  productId: string;
+  quantity: number;
+}
+
 interface TradeContextValue {
   state: TradeStoreState;
   storageHealth: StorageHealth;
@@ -35,6 +42,7 @@ interface TradeContextValue {
   bonusEligibility: BonusEligibilityResult;
   businessmanLeaderboard: BusinessmanSpendSummary[];
   pendingAdvanceTotal: number;
+  updateBaseDiscount: (newBasePercent: number) => boolean;
   addSupplier: (name: string) => boolean;
   addDealerProduct: (input: {
     name: string;
@@ -51,17 +59,15 @@ interface TradeContextValue {
   addBonusSlab: (input: { plusPercentage: number; min: number; max: number }) => boolean;
   deleteBonusSlab: (id: string) => boolean;
   issueAdvanceProduct: (input: {
-    supplierId: string;
-    productId: string;
-    quantity: number;
+    supplierIds: string[];
+    items: OrderLineInput[];
     note?: string;
   }) => boolean;
   settleAdvanceAllocation: (id: string) => boolean;
   addBusinessman: (shopName: string, area?: string) => BusinessmanRecord | null;
   createSaleOrder: (input: {
     businessmanId: string;
-    productId: string;
-    quantity: number;
+    items: OrderLineInput[];
   }) => boolean;
   clearStorageKeepBaseline: () => void;
   refreshStorageCheck: () => void;
@@ -102,6 +108,20 @@ export const TradeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const refreshStorageCheck = useCallback(() => {
     setStorageHealth(inspectStorageHealth());
   }, []);
+
+  const updateBaseDiscount = useCallback(
+    (newBasePercent: number): boolean => {
+      if (Number.isNaN(newBasePercent) || newBasePercent < 0 || newBasePercent > 95) {
+        return false;
+      }
+      const normalized = Number(newBasePercent.toFixed(2));
+      return persistUpdate((prev) => ({
+        ...prev,
+        baseDiscountPercentage: normalized,
+      }));
+    },
+    [persistUpdate]
+  );
 
   const addSupplier = useCallback(
     (rawName: string): boolean => {
@@ -194,40 +214,69 @@ export const TradeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const issueAdvanceProduct = useCallback(
     (input: {
-      supplierId: string;
-      productId: string;
-      quantity: number;
+      supplierIds: string[];
+      items: OrderLineInput[];
       note?: string;
     }): boolean => {
       const current = stateRef.current;
-      const supplier = current.suppliers.find((s) => s.id === input.supplierId);
-      const product = current.products.find(
-        (p) => p.id === input.productId && p.source === 'dealer'
-      );
-      if (!supplier || !product || input.quantity <= 0) return false;
+      const uniqueSupplierIds = Array.from(new Set(input.supplierIds));
+      const selectedSuppliers = uniqueSupplierIds
+        .map((id) => current.suppliers.find((s) => s.id === id))
+        .filter((s): s is SupplierRecord => Boolean(s));
 
-      const grossAmount = product.unitPrice * input.quantity;
+      if (selectedSuppliers.length === 0) return false;
+
+      // Merge quantities if the same product was added in multiple rows
+      const qtyByProduct = new Map<string, number>();
+      for (const line of input.items) {
+        if (!line.productId || !line.quantity || line.quantity <= 0) continue;
+        qtyByProduct.set(
+          line.productId,
+          (qtyByProduct.get(line.productId) ?? 0) + Math.round(line.quantity)
+        );
+      }
+
+      const builtItems: AdvanceOrderItem[] = [];
+      for (const [productId, quantity] of qtyByProduct.entries()) {
+        const product = current.products.find(
+          (p) => p.id === productId && p.source === 'dealer'
+        );
+        if (!product) continue;
+        builtItems.push({
+          productId: product.id,
+          productName: product.name,
+          unit: product.unit,
+          unitPrice: product.unitPrice,
+          quantity,
+          lineGrossAmount: product.unitPrice * quantity,
+        });
+      }
+
+      if (builtItems.length === 0) return false;
+
+      const grossAmount = builtItems.reduce((sum, i) => sum + i.lineGrossAmount, 0);
+      const totalQuantity = builtItems.reduce((sum, i) => sum + i.quantity, 0);
       const discountMultiplier = (100 - current.baseDiscountPercentage) / 100;
       const netPayableAmount = Math.round(grossAmount * discountMultiplier);
+      const nowIso = new Date().toISOString();
 
-      const allocation: AdvanceAllocation = {
+      const newAllocations: AdvanceAllocation[] = selectedSuppliers.map((supplier) => ({
         id: makeId('adv'),
         supplierId: supplier.id,
         supplierName: supplier.name,
-        productId: product.id,
-        productName: product.name,
-        quantity: input.quantity,
-        unitPrice: product.unitPrice,
+        items: builtItems.map((item) => ({ ...item })),
+        totalQuantity,
+        appliedDiscountPercentage: current.baseDiscountPercentage,
         grossAmount,
         netPayableAmount,
         note: input.note?.trim() || 'Advance stock allocation — payment deferred',
         status: 'pending',
-        createdAt: new Date().toISOString(),
-      };
+        createdAt: nowIso,
+      }));
 
       return persistUpdate((prev) => ({
         ...prev,
-        advanceAllocations: [allocation, ...prev.advanceAllocations],
+        advanceAllocations: [...newAllocations, ...prev.advanceAllocations],
       }));
     },
     [persistUpdate]
@@ -267,23 +316,48 @@ export const TradeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const createSaleOrder = useCallback(
-    (input: { businessmanId: string; productId: string; quantity: number }): boolean => {
+    (input: { businessmanId: string; items: OrderLineInput[] }): boolean => {
       const current = stateRef.current;
       const shop = current.businessmen.find((b) => b.id === input.businessmanId);
-      const product = current.products.find((p) => p.id === input.productId);
-      if (!shop || !product || input.quantity <= 0) return false;
+      if (!shop) return false;
 
-      const qty = Math.round(input.quantity);
+      // Consolidate duplicate items in the same order
+      const qtyByProduct = new Map<string, number>();
+      for (const line of input.items) {
+        if (!line.productId || !line.quantity || line.quantity <= 0) continue;
+        qtyByProduct.set(
+          line.productId,
+          (qtyByProduct.get(line.productId) ?? 0) + Math.round(line.quantity)
+        );
+      }
+
+      const builtItems: SaleOrderItem[] = [];
+      for (const [productId, quantity] of qtyByProduct.entries()) {
+        const product = current.products.find((p) => p.id === productId);
+        if (!product) continue;
+        builtItems.push({
+          productId: product.id,
+          productName: product.name,
+          productSource: product.source,
+          unit: product.unit,
+          unitPrice: product.unitPrice,
+          quantity,
+          lineTotal: product.unitPrice * quantity,
+        });
+      }
+
+      if (builtItems.length === 0) return false;
+
+      const totalQuantity = builtItems.reduce((sum, i) => sum + i.quantity, 0);
+      const totalAmount = builtItems.reduce((sum, i) => sum + i.lineTotal, 0);
+
       const order: SaleOrder = {
         id: makeId('ord'),
         businessmanId: shop.id,
         businessmanName: shop.shopName,
-        productId: product.id,
-        productName: product.name,
-        productSource: product.source,
-        unitPrice: product.unitPrice,
-        quantity: qty,
-        totalAmount: product.unitPrice * qty,
+        items: builtItems,
+        totalQuantity,
+        totalAmount,
         createdAt: new Date().toISOString(),
       };
 
@@ -337,10 +411,14 @@ export const TradeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (entry) {
         entry.totalSpend += order.totalAmount;
         entry.orderCount += 1;
-        entry.totalUnits += order.quantity;
+        entry.totalUnits += order.totalQuantity;
         if (!entry.lastOrderAt || order.createdAt > entry.lastOrderAt) {
           entry.lastOrderAt = order.createdAt;
-          entry.lastProductName = order.productName;
+          if (order.items.length === 1) {
+            entry.lastProductName = order.items[0].productName;
+          } else if (order.items.length > 1) {
+            entry.lastProductName = `${order.items[0].productName} +${order.items.length - 1} more`;
+          }
         }
       }
     }
@@ -364,6 +442,7 @@ export const TradeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       bonusEligibility,
       businessmanLeaderboard,
       pendingAdvanceTotal,
+      updateBaseDiscount,
       addSupplier,
       addDealerProduct,
       addSupplierCustomProduct,
@@ -383,6 +462,7 @@ export const TradeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       bonusEligibility,
       businessmanLeaderboard,
       pendingAdvanceTotal,
+      updateBaseDiscount,
       addSupplier,
       addDealerProduct,
       addSupplierCustomProduct,

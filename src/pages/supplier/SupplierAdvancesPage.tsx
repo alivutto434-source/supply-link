@@ -23,24 +23,37 @@ export const SupplierAdvancesPage: React.FC = () => {
       title: 'Supplier Recipient',
       dataIndex: 'supplierName',
       key: 'supplierName',
+      width: 190,
       render: (name: string) => (
         <span className="font-semibold text-slate-900">{name}</span>
       ),
     },
     {
-      title: 'Advance Product Received',
-      key: 'product',
+      title: 'Advance Products Received',
+      key: 'items',
       render: (_, record) => (
-        <div>
-          <div className="font-medium text-slate-800">{record.productName}</div>
+        <div className="space-y-1">
+          {record.items.map((item) => (
+            <div
+              key={item.productId}
+              className="flex flex-wrap items-center gap-1.5 text-sm"
+            >
+              <span className="font-medium text-slate-800">
+                {item.productName}
+              </span>
+              <Tag color="blue" className="!m-0 text-[11px] font-semibold">
+                × {formatNumberBD(item.quantity)} {item.unit}
+              </Tag>
+            </div>
+          ))}
           <div className="text-xs text-slate-500">{record.note}</div>
         </div>
       ),
     },
     {
-      title: 'Quantity',
-      dataIndex: 'quantity',
-      key: 'quantity',
+      title: 'Total Qty',
+      dataIndex: 'totalQuantity',
+      key: 'totalQuantity',
       align: 'right',
       width: 100,
       render: (qty: number) => (
@@ -50,13 +63,19 @@ export const SupplierAdvancesPage: React.FC = () => {
       ),
     },
     {
-      title: `Deferred Payable (-${formatPercent(state.baseDiscountPercentage)})`,
-      dataIndex: 'netPayableAmount',
+      title: 'Deferred Payable',
       key: 'netPayableAmount',
       align: 'right',
-      width: 190,
-      render: (val: number) => (
-        <span className="font-bold text-slate-900">{formatBDT(val)}</span>
+      width: 185,
+      render: (_, record) => (
+        <div>
+          <div className="font-bold text-slate-900">
+            {formatBDT(record.netPayableAmount)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            -{formatPercent(record.appliedDiscountPercentage)} base
+          </div>
+        </div>
       ),
     },
     {
@@ -168,7 +187,7 @@ export const SupplierAdvancesPage: React.FC = () => {
           columns={columns}
           dataSource={state.advanceAllocations}
           pagination={{ pageSize: 8, hideOnSinglePage: true }}
-          scroll={{ x: 760 }}
+          scroll={{ x: 780 }}
         />
       </Card>
     </div>

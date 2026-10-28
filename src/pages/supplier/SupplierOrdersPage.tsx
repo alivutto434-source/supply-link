@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Button,
   Card,
@@ -14,13 +14,14 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import {
   CheckCircleOutlined,
+  DeleteOutlined,
   PlusOutlined,
   RiseOutlined,
   ShopOutlined,
   ShoppingCartOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { useTrade } from '../../context/TradeContext';
+import { OrderLineInput, useTrade } from '../../context/TradeContext';
 import { SaleOrder } from '../../types/trade';
 import {
   evaluateMonthlyBonus,
@@ -31,8 +32,7 @@ import {
 
 interface OrderFormValues {
   businessmanId: string;
-  productId: string;
-  quantity: number;
+  items: OrderLineInput[];
 }
 
 interface NewShopFormValues {
@@ -53,13 +53,32 @@ export const SupplierOrdersPage: React.FC = () => {
     createSaleOrder,
   } = useTrade();
 
-  const watchedProductId = Form.useWatch('productId', form);
-  const watchedQuantity = Form.useWatch('quantity', form) || 0;
+  const watchedItems = Form.useWatch('items', form) || [];
 
-  const selectedProduct = state.products.find((p) => p.id === watchedProductId);
-  const orderSubtotal = selectedProduct
-    ? selectedProduct.unitPrice * watchedQuantity
-    : 0;
+  const itemizedPreview = useMemo(() => {
+    return watchedItems
+      .map((line) => {
+        const product = state.products.find((p) => p.id === line?.productId);
+        if (!product) return null;
+        const qty = Number(line?.quantity) || 0;
+        return {
+          product,
+          quantity: qty,
+          subtotal: product.unitPrice * qty,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  }, [state.products, watchedItems]);
+
+  const orderSubtotal = useMemo(
+    () => itemizedPreview.reduce((sum, entry) => sum + entry.subtotal, 0),
+    [itemizedPreview]
+  );
+
+  const totalOrderUnits = useMemo(
+    () => itemizedPreview.reduce((sum, entry) => sum + entry.quantity, 0),
+    [itemizedPreview]
+  );
 
   const projectedSellAmount = totalSellAmount + orderSubtotal;
   const projectedBonus = evaluateMonthlyBonus(
@@ -73,13 +92,18 @@ export const SupplierOrdersPage: React.FC = () => {
     projectedBonus.totalDiscount > bonusEligibility.totalDiscount;
 
   const handlePlaceOrder = (values: OrderFormValues) => {
-    const ok = createSaleOrder(values);
+    const ok = createSaleOrder({
+      businessmanId: values.businessmanId,
+      items: values.items,
+    });
     if (ok) {
       const shop = state.businessmen.find((b) => b.id === values.businessmanId);
       message.success(
-        `Sale recorded for ${shop?.shopName ?? 'Businessman'} (${formatBDT(orderSubtotal)}).`
+        `Order with ${values.items.length} item${values.items.length > 1 ? 's' : ''} recorded for ${shop?.shopName ?? 'Businessman'} (${formatBDT(orderSubtotal)}).`
       );
-      form.setFieldsValue({ quantity: 10 });
+      form.setFieldsValue({
+        items: [{ productId: state.products[0]?.id ?? '', quantity: 10 }],
+      });
     }
   };
 
@@ -98,42 +122,45 @@ export const SupplierOrdersPage: React.FC = () => {
       title: 'Businessman / Shop',
       dataIndex: 'businessmanName',
       key: 'businessmanName',
+      width: 210,
       render: (name: string) => (
         <span className="font-semibold text-slate-900">{name}</span>
       ),
     },
     {
-      title: 'Ordered Item',
-      key: 'item',
+      title: 'Ordered Items',
+      key: 'items',
       render: (_, record) => (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium text-slate-800">{record.productName}</span>
-          {record.productSource === 'dealer' ? (
-            <Tag color="blue" className="!m-0 text-[11px]">
-              Dealer Item
-            </Tag>
-          ) : (
-            <Tag color="purple" className="!m-0 text-[11px]">
-              Custom Item
-            </Tag>
-          )}
+        <div className="space-y-1.5">
+          {record.items.map((item) => (
+            <div
+              key={item.productId}
+              className="flex flex-wrap items-center gap-2 text-sm"
+            >
+              <span className="font-medium text-slate-800">
+                {item.productName}
+              </span>
+              <span className="text-xs font-semibold text-slate-600">
+                × {formatNumberBD(item.quantity)} ({formatBDT(item.lineTotal)})
+              </span>
+              {item.productSource === 'dealer' ? (
+                <Tag color="blue" className="!m-0 text-[11px]">
+                  Dealer Item
+                </Tag>
+              ) : (
+                <Tag color="purple" className="!m-0 text-[11px]">
+                  Custom Item
+                </Tag>
+              )}
+            </div>
+          ))}
         </div>
       ),
     },
     {
-      title: 'Unit Price',
-      dataIndex: 'unitPrice',
-      key: 'unitPrice',
-      align: 'right',
-      width: 135,
-      render: (price: number) => (
-        <span className="text-slate-600">{formatBDT(price)}</span>
-      ),
-    },
-    {
-      title: 'Quantity',
-      dataIndex: 'quantity',
-      key: 'quantity',
+      title: 'Total Qty',
+      dataIndex: 'totalQuantity',
+      key: 'totalQuantity',
       align: 'right',
       width: 110,
       render: (qty: number) => (
@@ -143,7 +170,7 @@ export const SupplierOrdersPage: React.FC = () => {
       ),
     },
     {
-      title: 'Total (BDT)',
+      title: 'Order Total (BDT)',
       dataIndex: 'totalAmount',
       key: 'totalAmount',
       align: 'right',
@@ -173,7 +200,7 @@ export const SupplierOrdersPage: React.FC = () => {
             Order / Sell Product to Businessman
           </h1>
           <p className="mt-1 mb-0 text-sm text-slate-500">
-            Select a businessman shop, choose any dealer or custom item, and enter order quantity.
+            Select a businessman shop and add one or multiple items with quantities in a single order.
           </p>
         </div>
 
@@ -185,7 +212,7 @@ export const SupplierOrdersPage: React.FC = () => {
         </Button>
       </div>
 
-      {/* Order Form & Live Bonus Calculator */}
+      {/* Multi-Item Order Form & Live Bonus Calculator */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <Card
           title={
@@ -202,8 +229,7 @@ export const SupplierOrdersPage: React.FC = () => {
             onFinish={handlePlaceOrder}
             initialValues={{
               businessmanId: state.businessmen[0]?.id,
-              productId: state.products[0]?.id,
-              quantity: 10,
+              items: [{ productId: state.products[0]?.id ?? '', quantity: 10 }],
             }}
           >
             <Form.Item
@@ -222,45 +248,102 @@ export const SupplierOrdersPage: React.FC = () => {
               />
             </Form.Item>
 
-            <Form.Item
-              label="Select Item (Dealer or Custom)"
-              name="productId"
-              rules={[{ required: true, message: 'Select an item to order' }]}
-            >
-              <Select
-                size="large"
-                showSearch
-                optionFilterProp="label"
-                options={state.products.map((p) => ({
-                  value: p.id,
-                  label: `${p.name} (${p.source === 'dealer' ? 'Dealer' : 'Custom'}) — ${formatBDT(p.unitPrice)} / ${p.unit}`,
-                }))}
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={`Quantity${selectedProduct ? ` (${selectedProduct.unit}s)` : ''}`}
-              name="quantity"
-              rules={[
-                { required: true, message: 'Enter quantity' },
-                { type: 'number', min: 1, message: 'Quantity must be at least 1' },
-              ]}
-            >
-              <InputNumber size="large" min={1} className="w-full" />
-            </Form.Item>
-
-            <div className="mb-5 flex flex-wrap items-center gap-2">
-              <span className="text-xs text-slate-500">Quick quantity:</span>
-              {[5, 10, 25, 50, 100].map((preset) => (
-                <Button
-                  key={preset}
-                  size="small"
-                  onClick={() => form.setFieldsValue({ quantity: preset })}
-                >
-                  {preset} units
-                </Button>
-              ))}
+            <div className="mb-2 text-sm font-medium text-slate-700">
+              Order Items & Quantities
             </div>
+
+            <Form.List name="items">
+              {(fields, { add, remove }) => (
+                <div className="mb-5 space-y-3">
+                  {fields.map(({ key, name, ...restField }) => {
+                    const currentRow = watchedItems[name];
+                    const selectedProd = state.products.find(
+                      (p) => p.id === currentRow?.productId
+                    );
+                    const rowSubtotal = selectedProd
+                      ? selectedProd.unitPrice * (Number(currentRow?.quantity) || 0)
+                      : 0;
+
+                    return (
+                      <div
+                        key={key}
+                        className="rounded-xl border border-solid border-slate-200 bg-slate-50/70 p-3"
+                      >
+                        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-12">
+                          <Form.Item
+                            {...restField}
+                            name={[name, 'productId']}
+                            className="!m-0 sm:col-span-7"
+                            rules={[
+                              { required: true, message: 'Select an item' },
+                            ]}
+                          >
+                            <Select
+                              size="large"
+                              showSearch
+                              optionFilterProp="label"
+                              placeholder="Select item (Dealer or Custom)"
+                              options={state.products.map((p) => ({
+                                value: p.id,
+                                label: `${p.name} (${p.source === 'dealer' ? 'Dealer' : 'Custom'}) — ${formatBDT(p.unitPrice)} / ${p.unit}`,
+                              }))}
+                            />
+                          </Form.Item>
+
+                          <Form.Item
+                            {...restField}
+                            name={[name, 'quantity']}
+                            className="!m-0 sm:col-span-3"
+                            rules={[
+                              { required: true, message: 'Qty' },
+                              { type: 'number', min: 1, message: 'Min 1' },
+                            ]}
+                          >
+                            <InputNumber
+                              size="large"
+                              min={1}
+                              className="w-full"
+                              placeholder="Qty"
+                            />
+                          </Form.Item>
+
+                          <div className="flex h-10 items-center justify-between gap-1 sm:col-span-2 sm:justify-end">
+                            <span className="text-xs font-semibold text-slate-700">
+                              {formatBDT(rowSubtotal)}
+                            </span>
+                            {fields.length > 1 && (
+                              <Button
+                                type="text"
+                                danger
+                                icon={<DeleteOutlined />}
+                                onClick={() => remove(name)}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <Button
+                    type="dashed"
+                    block
+                    icon={<PlusOutlined />}
+                    onClick={() =>
+                      add({
+                        productId:
+                          state.products[
+                            fields.length % Math.max(1, state.products.length)
+                          ]?.id ?? '',
+                        quantity: 10,
+                      })
+                    }
+                  >
+                    Add Another Item
+                  </Button>
+                </div>
+              )}
+            </Form.List>
 
             <Button
               type="primary"
@@ -287,15 +370,29 @@ export const SupplierOrdersPage: React.FC = () => {
           <div className="space-y-4">
             <div className="rounded-xl border border-solid border-slate-200 bg-slate-50 p-4">
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Current Order Value
+                Current Order Value ({itemizedPreview.length} item
+                {itemizedPreview.length === 1 ? '' : 's'} ·{' '}
+                {formatNumberBD(totalOrderUnits)} units)
               </div>
               <div className="mt-1 text-3xl font-bold text-blue-700">
                 {formatBDT(orderSubtotal)}
               </div>
-              {selectedProduct && (
-                <div className="mt-1 text-xs text-slate-500">
-                  {formatNumberBD(watchedQuantity)} ×{' '}
-                  {formatBDT(selectedProduct.unitPrice)} ({selectedProduct.name})
+
+              {itemizedPreview.length > 0 && (
+                <div className="mt-3 space-y-1 border-t border-solid border-slate-200 pt-2.5 text-xs text-slate-600">
+                  {itemizedPreview.map((entry, idx) => (
+                    <div
+                      key={`${entry.product.id}-${idx}`}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <span className="truncate">
+                        {formatNumberBD(entry.quantity)} × {entry.product.name}
+                      </span>
+                      <span className="shrink-0 font-semibold text-slate-800">
+                        {formatBDT(entry.subtotal)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

@@ -1,6 +1,5 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
-  Alert,
   Button,
   Card,
   Form,
@@ -12,14 +11,15 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  CheckCircleFilled,
+  CheckOutlined,
   DeleteOutlined,
   PercentageOutlined,
   PlusOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { useTrade } from '../../context/TradeContext';
 import { BonusSlab } from '../../types/trade';
-import { formatBDT, formatNumberBD, formatPercent } from '../../utils/format';
+import { formatNumberBD, formatPercent } from '../../utils/format';
 
 interface SlabFormValues {
   plusPercentage: number;
@@ -27,19 +27,38 @@ interface SlabFormValues {
   max: number;
 }
 
+interface BaseDiscountFormValues {
+  baseDiscountPercentage: number;
+}
+
 export const DealerBonusSlabsPage: React.FC = () => {
   const [form] = Form.useForm<SlabFormValues>();
+  const [baseForm] = Form.useForm<BaseDiscountFormValues>();
   const {
     state,
-    totalSellAmount,
-    bonusEligibility,
+    updateBaseDiscount,
     addBonusSlab,
     deleteBonusSlab,
   } = useTrade();
 
+  useEffect(() => {
+    baseForm.setFieldsValue({
+      baseDiscountPercentage: state.baseDiscountPercentage,
+    });
+  }, [baseForm, state.baseDiscountPercentage]);
+
   const sortedSlabs = [...state.bonusSlabs].sort(
     (a, b) => a.range.min - b.range.min
   );
+
+  const handleUpdateBase = (values: BaseDiscountFormValues) => {
+    const ok = updateBaseDiscount(values.baseDiscountPercentage);
+    if (ok) {
+      message.success(
+        `Base supplier discount updated to ${formatPercent(values.baseDiscountPercentage)}.`
+      );
+    }
+  };
 
   const handleAddSlab = (values: SlabFormValues) => {
     if (values.min >= values.max) {
@@ -89,7 +108,7 @@ export const DealerBonusSlabsPage: React.FC = () => {
       title: 'Percentage to Plus',
       dataIndex: 'plusPercentage',
       key: 'plusPercentage',
-      width: 180,
+      width: 200,
       render: (pct: number) => (
         <Tag color="green" className="px-2.5 py-0.5 text-sm font-bold">
           +{formatPercent(pct)}
@@ -99,7 +118,7 @@ export const DealerBonusSlabsPage: React.FC = () => {
     {
       title: 'Effective Discount (Base + Bonus)',
       key: 'effective',
-      width: 240,
+      width: 260,
       render: (_, record) => {
         const total = state.baseDiscountPercentage + record.plusPercentage;
         return (
@@ -112,29 +131,14 @@ export const DealerBonusSlabsPage: React.FC = () => {
       },
     },
     {
-      title: 'Current Supplier Status',
-      key: 'status',
-      width: 190,
-      render: (_, record) => {
-        const isCurrent = bonusEligibility.eligibleSlab?.id === record.id;
-        return isCurrent ? (
-          <Tag color="success" icon={<CheckCircleFilled />}>
-            Currently Eligible
-          </Tag>
-        ) : (
-          <span className="text-xs text-slate-400">Inactive tier</span>
-        );
-      },
-    },
-    {
       title: 'Action',
       key: 'action',
       align: 'right',
-      width: 120,
+      width: 130,
       render: (_, record) => (
         <Popconfirm
           title="Delete this bonus slab?"
-          description="Supplier eligibility will recalculate immediately."
+          description="Monthly discount tiers will update immediately."
           onConfirm={() => handleDelete(record)}
           okText="Delete"
           cancelText="Cancel"
@@ -161,17 +165,65 @@ export const DealerBonusSlabsPage: React.FC = () => {
             </Tag>
           </div>
           <p className="mt-1 mb-0 text-sm text-slate-500">
-            Configure target ranges in BDT and extra discount percentages added on top of the 22% base supplier discount.
+            Configure the base supplier discount and monthly target bonus slabs in BDT.
           </p>
         </div>
       </div>
 
-      <Alert
-        type="info"
-        showIcon
-        message={`Base Supplier Discount: ${formatPercent(state.baseDiscountPercentage)} (Applied automatically below first quota threshold)`}
-        description={`Current supplier monthly sales stand at ${formatBDT(totalSellAmount)}, qualifying for ${formatPercent(bonusEligibility.baseDiscount)} base + ${formatPercent(bonusEligibility.plusPercentage)} bonus = ${formatPercent(bonusEligibility.totalDiscount)} total discount.`}
-      />
+      {/* Editable Base Discount Card */}
+      <Card
+        title={
+          <div className="flex items-center gap-2">
+            <SettingOutlined className="text-blue-600" />
+            <span>Base Discount Setting</span>
+          </div>
+        }
+        className="border border-solid border-slate-200 shadow-sm"
+      >
+        <Form
+          form={baseForm}
+          layout="inline"
+          onFinish={handleUpdateBase}
+          initialValues={{
+            baseDiscountPercentage: state.baseDiscountPercentage,
+          }}
+          className="flex flex-col gap-3 sm:flex-row sm:items-center"
+        >
+          <Form.Item
+            label="Base Discount (%)"
+            name="baseDiscountPercentage"
+            className="!m-0"
+            rules={[
+              { required: true, message: 'Enter base discount %' },
+              { type: 'number', min: 0, max: 95, message: '0% – 95%' },
+            ]}
+          >
+            <InputNumber
+              size="large"
+              min={0}
+              max={95}
+              step={0.5}
+              addonAfter="%"
+              className="w-44"
+            />
+          </Form.Item>
+
+          <Form.Item className="!m-0">
+            <Button
+              type="primary"
+              htmlType="submit"
+              size="large"
+              icon={<CheckOutlined />}
+            >
+              Update Base Discount
+            </Button>
+          </Form.Item>
+
+          <span className="text-xs text-slate-500">
+            Active Base: <strong>{formatPercent(state.baseDiscountPercentage)}</strong> — bonus slab percentages add on top of this rate.
+          </span>
+        </Form>
+      </Card>
 
       {/* Add Slab Form (Add & Delete only, no Edit needed) */}
       <Card
@@ -260,7 +312,7 @@ export const DealerBonusSlabsPage: React.FC = () => {
         </Form>
       </Card>
 
-      {/* Slabs Table */}
+      {/* Configured Monthly Bonus Slabs Table */}
       <Card
         title={
           <span className="font-semibold text-slate-900">
@@ -283,7 +335,7 @@ export const DealerBonusSlabsPage: React.FC = () => {
           columns={columns}
           dataSource={sortedSlabs}
           pagination={false}
-          scroll={{ x: 680 }}
+          scroll={{ x: 600 }}
         />
       </Card>
     </div>

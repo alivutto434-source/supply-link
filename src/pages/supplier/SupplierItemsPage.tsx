@@ -75,8 +75,7 @@ export const SupplierItemsPage: React.FC = () => {
     if (!orderingProduct) return;
     const ok = createSaleOrder({
       businessmanId: values.businessmanId,
-      productId: orderingProduct.id,
-      quantity: values.quantity,
+      items: [{ productId: orderingProduct.id, quantity: values.quantity }],
     });
     if (ok) {
       const shop = state.businessmen.find((b) => b.id === values.businessmanId);

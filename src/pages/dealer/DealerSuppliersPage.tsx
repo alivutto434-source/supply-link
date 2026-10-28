@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Button, Card, Form, Input, Table, Tag, message } from 'antd';
+import { Button, Card, Form, Input, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   CreditCardOutlined,
@@ -96,13 +96,6 @@ export const DealerSuppliersPage: React.FC = () => {
           Register distribution suppliers under {state.dealerName}.
         </p>
       </div>
-
-      <Alert
-        type="info"
-        showIcon
-        message="Supply Chain Policy: Dealer → Supplier → Businessman"
-        description="Dealers supply exclusively to registered Suppliers and cannot sell directly to Businessmen (Shops). Suppliers handle all downstream sales to Businessmen."
-      />
 
       {/* Add Supplier — Just Take Names */}
       <Card

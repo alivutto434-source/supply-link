@@ -219,7 +219,7 @@ export const DealerProductsPage: React.FC = () => {
                   </span>
                 </>
               ) : (
-                'Suppliers receive 22% base discount plus any active monthly target slab bonus.'
+                `Suppliers receive ${formatPercent(state.baseDiscountPercentage)} base discount plus any active monthly target slab bonus.`
               )}
             </div>
 

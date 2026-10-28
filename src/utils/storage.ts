@@ -1,5 +1,10 @@
 import { INITIAL_TRADE_STATE } from '../data/initialData';
-import { StorageHealth, TradeStoreState } from '../types/trade';
+import {
+  AdvanceAllocation,
+  SaleOrder,
+  StorageHealth,
+  TradeStoreState,
+} from '../types/trade';
 
 export const STORAGE_KEY = 'supplylink_bd_trade_store_v1';
 const ESTIMATED_MAX_BYTES = 5 * 1024 * 1024; // Standard 5 MB browser localStorage quota
@@ -25,7 +30,6 @@ export function calculateLocalStorageBytes(): number {
     const key = window.localStorage.key(i);
     if (key) {
       const value = window.localStorage.getItem(key) ?? '';
-      // Browser localStorage stores strings in UTF-16 (2 bytes per code unit)
       totalBytes += (key.length + value.length) * 2;
     }
   }
@@ -67,6 +71,82 @@ export function inspectStorageHealth(customError: string | null = null): Storage
   };
 }
 
+function normalizeSaleOrder(raw: Record<string, unknown>): SaleOrder {
+  if (Array.isArray(raw.items)) {
+    return raw as unknown as SaleOrder;
+  }
+  // Migrate legacy single-item order records seamlessly
+  const quantity = Number(raw.quantity) || 1;
+  const unitPrice = Number(raw.unitPrice) || 0;
+  const lineTotal = Number(raw.totalAmount) || unitPrice * quantity;
+  return {
+    id: String(raw.id || `ord-${Date.now()}`),
+    businessmanId: String(raw.businessmanId || ''),
+    businessmanName: String(raw.businessmanName || ''),
+    items: [
+      {
+        productId: String(raw.productId || ''),
+        productName: String(raw.productName || 'Item'),
+        productSource:
+          raw.productSource === 'supplier_custom' ? 'supplier_custom' : 'dealer',
+        unit: 'Unit',
+        unitPrice,
+        quantity,
+        lineTotal,
+      },
+    ],
+    totalQuantity: quantity,
+    totalAmount: lineTotal,
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+  };
+}
+
+function normalizeAdvanceAllocation(
+  raw: Record<string, unknown>,
+  fallbackDiscount: number
+): AdvanceAllocation {
+  if (Array.isArray(raw.items)) {
+    return {
+      ...(raw as unknown as AdvanceAllocation),
+      appliedDiscountPercentage:
+        typeof raw.appliedDiscountPercentage === 'number'
+          ? raw.appliedDiscountPercentage
+          : fallbackDiscount,
+    };
+  }
+  // Migrate legacy single-item advance records seamlessly
+  const quantity = Number(raw.quantity) || 1;
+  const unitPrice = Number(raw.unitPrice) || 0;
+  const grossAmount = Number(raw.grossAmount) || unitPrice * quantity;
+  const netPayableAmount =
+    Number(raw.netPayableAmount) ||
+    Math.round(grossAmount * ((100 - fallbackDiscount) / 100));
+
+  return {
+    id: String(raw.id || `adv-${Date.now()}`),
+    supplierId: String(raw.supplierId || ''),
+    supplierName: String(raw.supplierName || ''),
+    items: [
+      {
+        productId: String(raw.productId || ''),
+        productName: String(raw.productName || 'Product'),
+        unit: 'Unit',
+        unitPrice,
+        quantity,
+        lineGrossAmount: grossAmount,
+      },
+    ],
+    totalQuantity: quantity,
+    appliedDiscountPercentage: fallbackDiscount,
+    grossAmount,
+    netPayableAmount,
+    note: String(raw.note || 'Advance stock allocation — payment deferred'),
+    status: raw.status === 'settled' ? 'settled' : 'pending',
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+    settledAt: raw.settledAt ? String(raw.settledAt) : undefined,
+  };
+}
+
 export function loadTradeState(): TradeStoreState {
   if (typeof window === 'undefined' || !window.localStorage) {
     return cloneInitialState();
@@ -79,15 +159,20 @@ export function loadTradeState(): TradeStoreState {
       return fresh;
     }
     const parsed = JSON.parse(raw) as Partial<TradeStoreState>;
-    // Ensure baseline records are always structurally valid
+    const baseDiscountPercentage =
+      typeof parsed.baseDiscountPercentage === 'number'
+        ? parsed.baseDiscountPercentage
+        : INITIAL_TRADE_STATE.baseDiscountPercentage;
+
     return {
       dealerName: parsed.dealerName || INITIAL_TRADE_STATE.dealerName,
-      baseDiscountPercentage:
-        typeof parsed.baseDiscountPercentage === 'number'
-          ? parsed.baseDiscountPercentage
-          : INITIAL_TRADE_STATE.baseDiscountPercentage,
-      suppliers: Array.isArray(parsed.suppliers) ? parsed.suppliers : cloneInitialState().suppliers,
-      products: Array.isArray(parsed.products) ? parsed.products : cloneInitialState().products,
+      baseDiscountPercentage,
+      suppliers: Array.isArray(parsed.suppliers)
+        ? parsed.suppliers
+        : cloneInitialState().suppliers,
+      products: Array.isArray(parsed.products)
+        ? parsed.products
+        : cloneInitialState().products,
       bonusSlabs: Array.isArray(parsed.bonusSlabs)
         ? parsed.bonusSlabs
         : cloneInitialState().bonusSlabs,
@@ -95,10 +180,17 @@ export function loadTradeState(): TradeStoreState {
         ? parsed.businessmen
         : cloneInitialState().businessmen,
       salesOrders: Array.isArray(parsed.salesOrders)
-        ? parsed.salesOrders
+        ? parsed.salesOrders.map((o) =>
+            normalizeSaleOrder(o as unknown as Record<string, unknown>)
+          )
         : cloneInitialState().salesOrders,
       advanceAllocations: Array.isArray(parsed.advanceAllocations)
-        ? parsed.advanceAllocations
+        ? parsed.advanceAllocations.map((a) =>
+            normalizeAdvanceAllocation(
+              a as unknown as Record<string, unknown>,
+              baseDiscountPercentage
+            )
+          )
         : cloneInitialState().advanceAllocations,
     };
   } catch {

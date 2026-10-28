@@ -31,27 +31,42 @@ export interface BusinessmanRecord {
   addedAt: string;
 }
 
+export interface SaleOrderItem {
+  productId: string;
+  productName: string;
+  productSource: 'dealer' | 'supplier_custom';
+  unit: string;
+  unitPrice: number;
+  quantity: number;
+  lineTotal: number;
+}
+
 export interface SaleOrder {
   id: string;
   businessmanId: string;
   businessmanName: string;
-  productId: string;
-  productName: string;
-  productSource: 'dealer' | 'supplier_custom';
-  unitPrice: number;
-  quantity: number;
+  items: SaleOrderItem[];
+  totalQuantity: number;
   totalAmount: number;
   createdAt: string;
+}
+
+export interface AdvanceOrderItem {
+  productId: string;
+  productName: string;
+  unit: string;
+  unitPrice: number;
+  quantity: number;
+  lineGrossAmount: number;
 }
 
 export interface AdvanceAllocation {
   id: string;
   supplierId: string;
   supplierName: string;
-  productId: string;
-  productName: string;
-  quantity: number;
-  unitPrice: number;
+  items: AdvanceOrderItem[];
+  totalQuantity: number;
+  appliedDiscountPercentage: number;
   grossAmount: number;
   netPayableAmount: number;
   note: string;
